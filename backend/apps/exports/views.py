@@ -287,4 +287,4 @@ class ImageDownloadView(APIView):
         response = FileResponse(stream, content_type=mime)
         if mime == SVG_MIME:
             response["Content-Security-Policy"] = SVG_SANDBOX_CSP
-        return _file_headers(response, name, attachment=mime in (ZIP_MIME, SVG_MIME))
+        return _file_headers(response, name, attachment=mime in (ZIP_MIME, SVG_MIME, delivery.PROJECT_MIME))

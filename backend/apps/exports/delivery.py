@@ -25,6 +25,7 @@ from django.urls import reverse
 logger = logging.getLogger("doory.exports")
 
 SALT = "doory.exports.image-link"
+PROJECT_MIME = "application/vnd.doory.project+zip"
 EXTENSIONS = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -33,12 +34,15 @@ EXTENSIONS = {
     "image/svg+xml": "svg",
     "application/pdf": "pdf",
     "application/zip": "zip",
+    PROJECT_MIME: "doory",
     "video/mp4": "mp4",
     "video/webm": "webm",
     "image/gif": "gif",
 }
 MIME_TYPES = {ext: mime for mime, ext in EXTENSIONS.items()}
-_NAME = re.compile(r"^(?P<made>\d{10})-[0-9a-f]{32}\.(?P<ext>png|jpg|webp|avif|svg|pdf|zip|mp4|webm|gif)$")
+_NAME = re.compile(
+    r"^(?P<made>\d{10})-[0-9a-f]{32}\.(?P<ext>png|jpg|webp|avif|svg|pdf|zip|doory|mp4|webm|gif)$"
+)
 
 
 def export_storage() -> FileSystemStorage:
