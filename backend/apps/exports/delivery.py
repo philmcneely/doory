@@ -25,6 +25,7 @@ from django.urls import reverse
 logger = logging.getLogger("doory.exports")
 
 SALT = "doory.exports.image-link"
+PROJECT_MIME = "application/vnd.doory.project+zip"
 EXTENSIONS = {
     "image/png": "png",
     "image/jpeg": "jpg",
@@ -33,7 +34,7 @@ EXTENSIONS = {
     "image/svg+xml": "svg",
     "application/pdf": "pdf",
     "application/zip": "zip",
-    "application/vnd.doory.project+zip": "doory",
+    PROJECT_MIME: "doory",
     "video/mp4": "mp4",
     "video/webm": "webm",
     "image/gif": "gif",

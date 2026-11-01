@@ -10,6 +10,8 @@ import shutil
 import unicodedata
 import uuid
 import zipfile
+import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
@@ -231,7 +233,7 @@ def _parse_asset(value: object) -> ArchivedAsset:
 def _parse_manifest(data: bytes) -> tuple[dict, list[ArchivedAsset], str, dict | None]:
     try:
         value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ProjectArchiveError("This project backup does not contain valid project data.") from exc
     if not isinstance(value, dict) or value.get("format") != FORMAT or value.get("version") != FORMAT_VERSION:
         raise ProjectArchiveError("This is not a supported Doory project backup.")
@@ -303,6 +305,14 @@ def _rewrite_local_references(document: dict, replacements: dict[str, Asset]) ->
     return rewritten
 
 
+def _read(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    """One entry (Python reads no more than the size it declares); a damaged one is a bad backup."""
+    try:
+        return archive.read(info)
+    except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError) as exc:
+        raise ProjectArchiveError("This project backup could not be opened.") from exc
+
+
 def _checked_archive(data: bytes) -> tuple[zipfile.ZipFile, dict, list[ArchivedAsset], str, dict | None]:
     if len(data) > MAX_PROJECT_BYTES:
         raise ProjectArchiveError("This project backup is too large to open safely.")
@@ -321,7 +331,7 @@ def _checked_archive(data: bytes) -> tuple[zipfile.ZipFile, dict, list[ArchivedA
         manifest_info = by_name.get(MANIFEST)
         if manifest_info is None or manifest_info.file_size > MAX_MANIFEST_BYTES:
             raise ProjectArchiveError("This project backup does not contain a valid project file.")
-        document, assets, title, thumbnail = _parse_manifest(archive.read(manifest_info))
+        document, assets, title, thumbnail = _parse_manifest(_read(archive, manifest_info))
         expected = {MANIFEST, *(asset.path for asset in assets), *([THUMBNAIL] if thumbnail else [])}
         if set(names) != expected:
             raise ProjectArchiveError("This project backup contains missing or unexpected files.")
@@ -331,8 +341,16 @@ def _checked_archive(data: bytes) -> tuple[zipfile.ZipFile, dict, list[ArchivedA
         raise
 
 
-def import_project(data: bytes, owner, *, folder: Folder | None = None) -> Design:
-    """Validate a `.doory` archive, upload its files, and create a new account design."""
+def import_project(
+    data: bytes,
+    owner,
+    *,
+    folder: Folder | None = None,
+    charge: Callable[[int], None] | None = None,
+) -> Design:
+    """Validate a `.doory` archive, upload its files, and create a new account design. Once the archive is
+    checked, and before anything is stored, `charge` is called with its number of files (to count them
+    against a rate limit)."""
     archive, document, assets, title, thumbnail = _checked_archive(data)
     created: list[Asset] = []
     design: Design | None = None
@@ -341,6 +359,8 @@ def import_project(data: bytes, owner, *, folder: Folder | None = None) -> Desig
         archived = {asset.id: asset for asset in assets}
         if set(referenced) != set(archived):
             raise ProjectArchiveError("This project backup is missing one or more files used by the design.")
+        if charge is not None:
+            charge(len(referenced))
         replacements: dict[str, Asset] = {}
         by_name = {info.filename: info for info in archive.infolist()}
         for asset_id in referenced:
@@ -348,14 +368,14 @@ def import_project(data: bytes, owner, *, folder: Folder | None = None) -> Desig
             info = by_name[spec.path]
             if info.file_size > settings.MAX_UPLOAD_BYTES:
                 raise ProjectArchiveError(f'The file "{spec.name or asset_id}" is too large to upload.')
-            asset = create_asset(owner, archive.read(info), name=clean_name(spec.name, "Imported file"))
+            asset = create_asset(owner, _read(archive, info), name=clean_name(spec.name, "Imported file"))
             created.append(asset)
             replacements[asset_id] = asset
         rewritten = _rewrite_local_references(document, replacements)
         validate_document(rewritten, max_bytes=settings.MAX_DESIGN_DOCUMENT_BYTES)
         design = services.create_design(owner, title=title, document=rewritten, folder=folder)
         if thumbnail:
-            thumb = archive.read(THUMBNAIL)
+            thumb = _read(archive, by_name[THUMBNAIL])
             uploaded = SimpleUploadedFile("thumbnail", thumb, content_type=thumbnail["mime"])
             services.set_thumbnail(design, uploaded)
         return design

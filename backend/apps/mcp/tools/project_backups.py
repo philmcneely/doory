@@ -11,11 +11,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from apps.apitokens.scopes import ASSETS_WRITE, DESIGNS_READ, DESIGNS_WRITE
+from apps.assets.throttling import UploadRateThrottle
 from apps.designs.project_archive import MIME, export_project, import_project
 from apps.exports.delivery import store_image
+from apps.exports.throttling import ExportRateThrottle
 
 from ..context import current
-from ..registry import tool
+from ..registry import throttle, tool
 from .designs import DesignId, _design, _folder, _with_summary
 
 
@@ -24,6 +26,7 @@ def export_project_backup(design_id: DesignId) -> dict[str, Any]:
     """Download an editable `.doory` backup of one account design, including its referenced uploads. The
     temporary link expires; download it before calling import_project_backup or handing it to the user."""
     design = _design(design_id)
+    throttle(ExportRateThrottle())  # a backup can be far larger than an image, and stays on disk a while
     with export_project(design) as backup:
         url = store_image(backup.file, MIME)
         return {
@@ -63,5 +66,11 @@ def import_project_backup(
         data = base64.b64decode(project_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ToolError("project_base64 is not valid base64. Nothing was imported.") from exc
-    design = import_project(data, caller.user, folder=_folder(folder_id))
+    design = import_project(data, caller.user, folder=_folder(folder_id), charge=_charge_uploads)
     return _with_summary(design)
+
+
+def _charge_uploads(files: int) -> None:
+    """Each file of a backup counts against the `upload` rate, as if it were uploaded on its own."""
+    for _ in range(files):
+        throttle(UploadRateThrottle())
